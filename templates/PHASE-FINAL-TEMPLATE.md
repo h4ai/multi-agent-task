@@ -36,27 +36,84 @@ node scripts/tasks/validate-task.js TASK-XXX
 # 如果有 ❌ ERROR → 修复后重试
 ```
 
-## 4. Self-Improve（反思）
+## 4. Self-Improve（反思 — 强制，不可跳过！）
 
+### 4a. 回答 3 个问题（必须认真思考）
+1. **做对了什么？** — 哪个决策/方法效果好？可复用？
+2. **做错了什么？** — 哪里卡住了？走了弯路？犯了什么错？
+3. **下次怎么改？** — 如果重做这个任务，会怎么做？
+
+### 4b. 写入私有 learnings（workspace/.learnings/）
 ```bash
-# 反思本次任务执行
-# 写入私有记录
-cat >> /path/to/workspace/.learnings/LEARNINGS.md << 'EOF'
+# 踩坑记录 → ERRORS.md
+cat >> /path/to/workspace/.learnings/ERRORS.md << 'EOF'
 
-### [LRN-{date}-{seq}] {一句话标题}
-- Agent: {role}
-- Task: TASK-XXX
-- Category: insight/correction/best_practice
-- Priority: P0/P1/P2
-- Description: ...
-- Resolution: ...
+### [ERR-YYYYMMDD-XXX] {一句话描述错误}
+- **Pattern-Key**: {唯一关键词，用于去重}
+- **Agent**: {role}
+- **Task**: TASK-XXX
+- **Context**: 在做什么时遇到的
+- **Problem**: 具体错误是什么
+- **Root Cause**: 根因分析
+- **Solution**: 怎么解决的
+- **Prevention**: 下次怎么避免
+- **Recurrence-Count**: 1
+- **First-Seen**: YYYY-MM-DD
 EOF
 
-# 写入当日 memory
+# 最佳实践 → LEARNINGS.md
+cat >> /path/to/workspace/.learnings/LEARNINGS.md << 'EOF'
+
+### [LRN-YYYYMMDD-XXX] {一句话标题}
+- **Pattern-Key**: {唯一关键词}
+- **Agent**: {role}
+- **Task**: TASK-XXX
+- **Category**: insight | correction | best_practice | pattern
+- **What Worked**: 具体做法
+- **Why It Worked**: 原因分析
+- **Reusable**: Yes/No — 适用场景说明
+- **Recurrence-Count**: 1
+- **First-Seen**: YYYY-MM-DD
+EOF
+```
+
+### 4c. 写入 shared learnings（跨 Agent 共享）
+> 只有**通用性强**的经验才写 shared，项目特定的只写私有。
+
+```bash
+SHARED_DIR="${HOME}/.openclaw/shared/learnings/{role}"
+
+# 判断标准：其他 Agent 能从中受益吗？
+# ✅ "Docker build 时 node_modules 缓存导致依赖不更新" → 通用
+# ❌ "TASK-016 的 VersionUploader 组件 props 名写错了" → 项目特定
+
+# 如果是通用经验：
+cat >> ${SHARED_DIR}/LEARNINGS.md << 'EOF'
+### [LRN-YYYYMMDD-XXX] {标题}
+- Pattern-Key: {关键词}
+- Source-Task: TASK-XXX
+- Applicable-To: dev/qa/po/all
+- Summary: ...
+EOF
+
+# 如果影响多个角色，也写到 common：
+cat >> ${HOME}/.openclaw/shared/learnings/common/CROSS-AGENT.md << 'EOF'
+### [CROSS-YYYYMMDD-XXX] {标题}
+- Source: {role} / TASK-XXX
+- Affects: dev, qa（列出受影响的角色）
+- Summary: ...
+EOF
+```
+
+### 4d. 写入当日 memory
+```bash
 cat >> /path/to/workspace/memory/YYYY-MM-DD.md << 'EOF'
+
 ### TASK-XXX 完成
 - AC: X/X PASS
-- 经验: ...
+- 耗时: Xh
+- 经验: {一句话总结最重要的学习}
+- 踩坑: {一句话总结最大的坑，如果没有就写"无"}
 EOF
 ```
 

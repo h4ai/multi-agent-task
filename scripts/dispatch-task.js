@@ -142,6 +142,37 @@ for (const taskId of taskIds) {
   
   console.log(`  📩 Step 3: 发送到 ${agent} inbox (${taskPriority})...`);
   
+  // Step 5a: Load recent learnings for this agent (L2)
+  let learningsContext = '';
+  try {
+    const sharedDir = path.join(process.env.HOME || '/home/azureuser', '.openclaw/shared/learnings', agent);
+    const commonDir = path.join(process.env.HOME || '/home/azureuser', '.openclaw/shared/learnings/common');
+    
+    const loadRecent = (file, limit = 3) => {
+      if (!fs.existsSync(file)) return '';
+      const content = fs.readFileSync(file, 'utf8');
+      // Extract last N entries (### headers)
+      const entries = content.split(/(?=^### )/m).filter(e => e.startsWith('### '));
+      return entries.slice(-limit).join('\n').trim();
+    };
+    
+    const agentErrors = loadRecent(path.join(sharedDir, 'ERRORS.md'), 3);
+    const agentLearnings = loadRecent(path.join(sharedDir, 'LEARNINGS.md'), 3);
+    const crossLearnings = loadRecent(path.join(commonDir, 'CROSS-AGENT.md'), 2);
+    
+    const parts = [];
+    if (agentErrors) parts.push(`⚠️ 最近踩坑（避免重蹈覆辙）:\n${agentErrors}`);
+    if (agentLearnings) parts.push(`💡 最近最佳实践:\n${agentLearnings}`);
+    if (crossLearnings) parts.push(`🔗 跨 Agent 经验:\n${crossLearnings}`);
+    
+    if (parts.length > 0) {
+      learningsContext = '\n\n--- 历史经验（自动附带）---\n' + parts.join('\n\n');
+      console.log(`  📚 附带 ${parts.length} 类历史经验`);
+    }
+  } catch (e) {
+    // Learnings load failure is non-fatal
+  }
+  
   // Build rich content with context from TASK JSON
   const specRef = task.spec_context?.spec_id || task.spec || '';
   const acSummary = (task.acceptance_criteria || []).map((ac, i) => `  ${i+1}. ${ac}`).join('\n');
@@ -162,6 +193,7 @@ for (const taskId of taskIds) {
     ``,
     acSummary ? `验收标准:\n${acSummary}` : '',
     stepsSummary ? `\n步骤:\n${stepsSummary}` : '',
+    learningsContext,
   ].filter(Boolean).join('\n');
 
   try {
