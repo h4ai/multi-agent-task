@@ -2,6 +2,35 @@
 
 > 每个 subagent 任务完成时必须执行以下步骤，跳过任何一步 = 任务未完成。
 
+## 0. 任务执行日志（贯穿整个任务，不只是收尾）
+
+> 从任务开始到结束，持续写入执行日志。这是 PM 巡检和事后回溯的关键依据。
+
+```bash
+# 任务开始时创建日志
+TASK_LOG="tasks/TASK-XXX.log"
+echo "[$(date -Iseconds)] 🚀 TASK-XXX 开始执行" >> $TASK_LOG
+echo "[$(date -Iseconds)] 📖 读取 TASK JSON + Spec" >> $TASK_LOG
+
+# 每完成一个步骤
+echo "[$(date -Iseconds)] ✅ Step 1: {步骤名} — 完成" >> $TASK_LOG
+
+# 遇到问题时
+echo "[$(date -Iseconds)] ⚠️ 遇到问题: {描述}" >> $TASK_LOG
+echo "[$(date -Iseconds)] 💡 解决方案: {描述}" >> $TASK_LOG
+
+# 关键决策
+echo "[$(date -Iseconds)] 🔀 决策: {选择 A 而非 B，原因: ...}" >> $TASK_LOG
+
+# 任务完成时
+echo "[$(date -Iseconds)] 🏁 TASK-XXX 完成，AC X/X PASS" >> $TASK_LOG
+```
+
+**日志格式规范：**
+- 每行以 ISO 时间戳开头：`[2026-03-22T01:20:00+08:00]`
+- 用 emoji 标记类型：🚀开始 ✅完成 ⚠️问题 💡解决 🔀决策 ❌失败 🏁结束
+- 一行一条，简洁但信息完整
+
 ## 1. 更新 TASK JSON（防止 Monitor 告警）
 
 ```bash

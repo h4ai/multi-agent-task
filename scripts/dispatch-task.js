@@ -19,6 +19,44 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
+// #3: 从 TASK JSON 提取关键词用于 learnings 语义匹配
+function extractKeywords(task) {
+  const sources = [
+    task.title || '',
+    task.description || '',
+    ...(task.acceptance_criteria || []),
+    ...(task.steps || []).map(s => s.title || ''),
+    ...(task.code_context?.files || []),
+    task.spec_context?.spec_id || '',
+  ];
+  const text = sources.join(' ').toLowerCase();
+  
+  // 提取有意义的技术关键词（去掉 stop words）
+  const stopWords = new Set([
+    'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been',
+    'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with',
+    '的', '了', '是', '在', '和', '从', '到', '等', '中', '与', '及',
+    'task', 'spec', 'should', 'must', 'will', 'can', 'need',
+  ]);
+  
+  const words = text.match(/[a-z][a-z0-9_-]{2,}/g) || [];
+  const unique = [...new Set(words)].filter(w => !stopWords.has(w));
+  
+  // 优先保留技术词汇（出现在文件路径、框架名等）
+  const techBoost = ['prisma', 'docker', 'nest', 'react', 'auth', 'jwt', 'cookie',
+    'guard', 'router', 'api', 'frontend', 'backend', 'test', 'deploy', 'build',
+    'admin', 'dashboard', 'upload', 'review', 'version', 'template', 'search',
+    'tanstack', 'query', 'mutation', 'component', 'service', 'controller'];
+  
+  const scored = unique.map(w => ({
+    word: w,
+    score: techBoost.includes(w) ? 2 : 1
+  }));
+  scored.sort((a, b) => b.score - a.score);
+  
+  return scored.slice(0, 15).map(s => s.word);
+}
+
 // Auto-detect config: try local config.js first, then build inline
 let config;
 try {
@@ -142,32 +180,48 @@ for (const taskId of taskIds) {
   
   console.log(`  📩 Step 3: 发送到 ${agent} inbox (${taskPriority})...`);
   
-  // Step 5a: Load recent learnings for this agent (L2)
+  // Step 5a: Load relevant learnings for this agent (L2 + L3 keyword matching)
   let learningsContext = '';
   try {
     const sharedDir = path.join(process.env.HOME || '/home/azureuser', '.openclaw/shared/learnings', agent);
     const commonDir = path.join(process.env.HOME || '/home/azureuser', '.openclaw/shared/learnings/common');
     
-    const loadRecent = (file, limit = 3) => {
+    // #3: 从任务内容提取关键词用于语义匹配
+    const taskKeywords = extractKeywords(task);
+    
+    const loadRelevant = (file, limit = 3) => {
       if (!fs.existsSync(file)) return '';
       const content = fs.readFileSync(file, 'utf8');
-      // Extract last N entries (### headers)
       const entries = content.split(/(?=^### )/m).filter(e => e.startsWith('### '));
+      if (entries.length === 0) return '';
+      
+      // 如果有关键词，按相关性排序；否则取最近的
+      if (taskKeywords.length > 0) {
+        const scored = entries.map(entry => {
+          const lower = entry.toLowerCase();
+          const score = taskKeywords.reduce((s, kw) => s + (lower.includes(kw) ? 1 : 0), 0);
+          return { entry, score };
+        });
+        scored.sort((a, b) => b.score - a.score);
+        return scored.filter(s => s.score > 0).slice(0, limit).map(s => s.entry).join('\n').trim();
+      }
       return entries.slice(-limit).join('\n').trim();
     };
     
-    const agentErrors = loadRecent(path.join(sharedDir, 'ERRORS.md'), 3);
-    const agentLearnings = loadRecent(path.join(sharedDir, 'LEARNINGS.md'), 3);
-    const crossLearnings = loadRecent(path.join(commonDir, 'CROSS-AGENT.md'), 2);
+    const agentErrors = loadRelevant(path.join(sharedDir, 'ERRORS.md'), 3);
+    const agentLearnings = loadRelevant(path.join(sharedDir, 'LEARNINGS.md'), 3);
+    const agentPatterns = loadRelevant(path.join(sharedDir, 'PATTERNS.md'), 2);
+    const crossLearnings = loadRelevant(path.join(commonDir, 'CROSS-AGENT.md'), 2);
     
     const parts = [];
-    if (agentErrors) parts.push(`⚠️ 最近踩坑（避免重蹈覆辙）:\n${agentErrors}`);
-    if (agentLearnings) parts.push(`💡 最近最佳实践:\n${agentLearnings}`);
+    if (agentErrors) parts.push(`⚠️ 相关踩坑（避免重蹈覆辙）:\n${agentErrors}`);
+    if (agentLearnings) parts.push(`💡 相关最佳实践:\n${agentLearnings}`);
+    if (agentPatterns) parts.push(`🔧 相关代码模式:\n${agentPatterns}`);
     if (crossLearnings) parts.push(`🔗 跨 Agent 经验:\n${crossLearnings}`);
     
     if (parts.length > 0) {
-      learningsContext = '\n\n--- 历史经验（自动附带）---\n' + parts.join('\n\n');
-      console.log(`  📚 附带 ${parts.length} 类历史经验`);
+      learningsContext = '\n\n--- 历史经验（按任务相关性自动匹配）---\n' + parts.join('\n\n');
+      console.log(`  📚 附带 ${parts.length} 类相关经验 (keywords: ${taskKeywords.slice(0,5).join(',')})`);
     }
   } catch (e) {
     // Learnings load failure is non-fatal

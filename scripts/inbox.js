@@ -25,17 +25,18 @@ const path = require('path');
 const crypto = require('crypto');
 
 // === Config ===
-const sharedDir = process.env.MAT_SHARED_DIR ||
+const SHARED_DIR = process.env.OPENCLAW_SHARED_DIR || 
   path.join(require('os').homedir(), '.openclaw', 'shared');
-const INBOX_ROOT = path.join(sharedDir, 'inbox');
-const EVENT_LOG_DIR = path.join(sharedDir, 'inbox', '.events');
-const DEAD_LETTER_DIR = path.join(sharedDir, 'inbox', '.dead_letters');
+const INBOX_ROOT = path.join(SHARED_DIR, 'inbox');
+const EVENT_LOG_DIR = path.join(SHARED_DIR, 'inbox', '.events');
+const DEAD_LETTER_DIR = path.join(SHARED_DIR, 'inbox', '.dead_letters');
 
 const KNOWN_AGENTS = ['pm', 'dev', 'qa', 'po', 'monitor'];
 const VALID_TYPES = [
   'message', 'task_done', 'bug_report', 'request', 'alert',
   'broadcast', 'status_update', 'review_result', 'gate_pass',
-  'gate_fail', 'zombie_detected', 'dep_resolved'
+  'gate_fail', 'zombie_detected', 'dep_resolved',
+  'question', 'answer', 'ask'   // #4: 跨 Agent "请教"
 ];
 
 // === Helpers ===
@@ -114,8 +115,12 @@ function sendMessage(to, from, type, content, opts = {}) {
 }
 
 // === Core: Receive (借鉴 ClawTeam FileTransport.claim_messages) ===
+// #1 改进: receive 消费后归档到 .archive/，而不是直接删除
 function receiveMessages(agent, limit = 10) {
   const inbox = agentInbox(agent);
+  const archiveDir = path.join(inbox, '.archive');
+  ensureDir(archiveDir);
+  
   const files = fs.readdirSync(inbox)
     .filter(f => f.startsWith('msg-') && f.endsWith('.json'))
     .sort(); // 时间戳排序 = FIFO
@@ -136,14 +141,30 @@ function receiveMessages(agent, limit = 10) {
     try {
       const data = fs.readFileSync(consumedPath, 'utf8');
       const msg = JSON.parse(data);
+      msg._consumed_at = new Date().toISOString();
       messages.push(msg);
-      // Step 3: ack — 删除 consumed 文件
+      
+      // Step 3: 归档（而非删除）— 保留可回顾
+      const archivePath = path.join(archiveDir, f);
+      fs.writeFileSync(archivePath, JSON.stringify(msg, null, 2));
       fs.unlinkSync(consumedPath);
     } catch (e) {
       // 解析失败 → dead_letter（借鉴 ClawTeam quarantine）
       quarantine(agent, consumedPath, e.message);
     }
   }
+
+  // 自动清理 >7 天的 archive 文件（防止无限膨胀）
+  try {
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const archiveFiles = fs.readdirSync(archiveDir).filter(f => f.startsWith('msg-'));
+    for (const f of archiveFiles) {
+      const ts = parseInt(f.split('-')[1]);
+      if (ts && ts < cutoff) {
+        fs.unlinkSync(path.join(archiveDir, f));
+      }
+    }
+  } catch {} // best-effort cleanup
 
   return messages;
 }
