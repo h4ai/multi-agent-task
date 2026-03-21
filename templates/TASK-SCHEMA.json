@@ -1,0 +1,170 @@
+{
+  "$schema": "task-schema-v2.4",
+  "description": "Enterprise SkillHub 任务管理 Schema (v2.4: +prerequisites 自动领取)",
+
+  "task_schema": {
+    "id": "TASK-XXX",
+    "title": "任务标题",
+    "priority": "P0 | P1 | P2",
+    "status": "PENDING | IN_PROGRESS | BLOCKED | REVIEW | DONE | FAILED | CANCELED",
+    "assignee": "dev | qa | po | pm",
+    "task_class": "security | feature | migration | ui-only | bugfix | infra",
+    "runtime_level": "local | docker",
+    "hotfix": false,
+
+    "_comment_execution": "★ v2.2 新增: 并行执行控制",
+    "execution": {
+      "mode": "subagent | inline",
+      "_mode_desc": "subagent=PM spawn 独立 subagent 执行（推荐，可并行）; inline=在当前 session 内执行（串行）",
+      "parallel_group": "wave-1 | wave-2 | ...",
+      "_parallel_group_desc": "同一 parallel_group 内无依赖的任务由 PM 同时 spawn",
+      "timeout_minutes": 60,
+      "_timeout_desc": "subagent 超时时间，超时后 PM 自动 kill 并标记 FAILED",
+      "max_retries": 1,
+      "_max_retries_desc": "subagent 失败后自动重试次数"
+    },
+
+    "_comment_worktree": "★ v2.3 新增: Git Worktree 分支隔离",
+    "worktree": {
+      "enabled": true,
+      "_enabled_desc": "true=Dev subagent 在独立 worktree 中工作; QA/PO 不需要 worktree",
+      "branch": "task/TASK-XXX",
+      "_branch_desc": "任务分支名，由 PM 自动生成（task/{TASK_ID}）",
+      "path": "/home/azureuser/.openclaw/worktrees/TASK-XXX",
+      "_path_desc": "worktree 物理路径，由 worktree-manage.sh 自动创建",
+      "merge_strategy": "no-ff",
+      "_merge_strategy_desc": "合并策略: no-ff=保留分支历史 | rebase=线性历史 | squash=压缩为单 commit"
+    },
+    "created": "ISO 8601 datetime",
+    "updated": "ISO 8601 datetime",
+    "completed": "ISO 8601 datetime | null",
+
+    "allowed_transitions": {
+      "PENDING": ["IN_PROGRESS", "BLOCKED", "CANCELED"],
+      "IN_PROGRESS": ["REVIEW", "BLOCKED", "CANCELED", "FAILED"],
+      "REVIEW": ["DONE", "IN_PROGRESS"],
+      "BLOCKED": ["IN_PROGRESS", "CANCELED"],
+      "DONE": ["IN_PROGRESS (reopen, 需 reopen_reason)"],
+      "FAILED": ["IN_PROGRESS (retry)", "CANCELED"],
+      "CANCELED": ["PENDING (reactivate, 需 reason)"]
+    },
+
+    "_comment_steps": "★ Step 子任务结构（v2.2: +parallel 并行控制）",
+    "steps": [
+      {
+        "step_id": "S1",
+        "type": "research | plan | implement | test | runtime_verify | review | deploy",
+        "title": "步骤标题",
+        "assignee_agent": "dev | qa | po | pm",
+        "status": "PENDING | READY | RUNNING | DONE | FAILED | WAITING_HUMAN",
+        "parallel": false,
+        "_parallel_desc": "true=此 Step 可与同级无依赖 Step 并行执行（Agent 自动 spawn 子 subagent）",
+        "inputs": {
+          "_description": "本步骤需要的输入（强类型契约）",
+          "spec_sections": ["§6"],
+          "source_files": ["packages/frontend/src/App.tsx"],
+          "depends_on_steps": ["S0"]
+        },
+        "outputs": {
+          "_description": "本步骤必须产出的结果（结构化，不能只是自然语言）",
+          "type": "commit | test_report | screenshot | api_log | document",
+          "expected": ["commit hash", "tsc 0 errors log"],
+          "actual": []
+        },
+        "guard_conditions": {
+          "_description": "★ 新增: 守卫条件（来自调研精华 2）—— 必须满足才能转换状态",
+          "enter_RUNNING": "depends_on_steps 全部 DONE",
+          "enter_DONE": "outputs.actual 不为空 + 符合 outputs.type"
+        },
+        "retry": {
+          "max_retries": 2,
+          "retryable_errors": ["docker_build_fail", "test_flaky", "network_timeout"]
+        }
+      }
+    ],
+
+    "_comment_guards": "★ 新增: Task 级守卫条件（来自调研精华 2）",
+    "guard_conditions": {
+      "enter_REVIEW": "所有 type=implement 的 steps DONE + 所有 type=test 的 steps DONE + 所有 type=runtime_verify 的 steps DONE",
+      "enter_DONE": "PM 门禁通过 + regression_check 全 PASS"
+    },
+
+    "spec_context": {
+      "spec_id": "SPEC-007",
+      "sections": ["§6"],
+      "acceptance_criteria": ["AC-F1: Given/When/Then"],
+      "spec_file": "specs/SPEC-007.md"
+    },
+
+    "code_context": {
+      "files": ["packages/frontend/src/App.tsx"],
+      "tests": ["packages/frontend/src/__tests__/xxx.test.tsx"],
+      "commits": [],
+      "branch": "main"
+    },
+
+    "doc_context": {
+      "design_docs": [],
+      "api_docs": ["GET /api/v1/admin/users"],
+      "references": []
+    },
+
+    "env_context": {
+      "services": ["skillhub-frontend", "skillhub-backend"],
+      "urls": { "frontend": "http://localhost", "api": "http://localhost:3000" },
+      "test_accounts": { "admin": "testadmin / Test123!", "user": "user01 / Test123!" },
+      "docker_compose": "deploy/docker/docker-compose.yml",
+      "rebuild_targets": ["skillhub-frontend"],
+      "health_check": "curl -sf http://localhost:3000/api/v1/health"
+    },
+
+    "verification": {
+      "commands": ["curl -s http://localhost:3000/api/v1/health"],
+      "manual_steps": ["Playwright: 打开 /admin → 验证重定向"],
+      "screenshots": [],
+      "runtime_logs": {
+        "api_requests": [],
+        "browser_checks": [],
+        "backend_logs": []
+      },
+      "regression_check": { "homepage": null, "search": null, "login_logout": null }
+    },
+
+    "_comment_artifacts": "★ 新增: Artifacts 结构化管理（来自调研精华 4）",
+    "artifacts": [
+      {
+        "artifact_id": "ART-001",
+        "step_id": "S2",
+        "kind": "commit | diff | test_report | screenshot | api_log | pdf | file",
+        "uri": "git:abc1234 | /tmp/openclaw/qa-xxx/screenshot.png | specs/reports/xxx.md",
+        "sha256": "可选，用于校验文件完整性",
+        "created_at": "ISO 8601 datetime",
+        "description": "产物描述"
+      }
+    ],
+
+    "_comment_event_log": "★ 新增: Event Log 事件日志（来自调研精华 3 简化版）",
+    "event_log": [
+      {
+        "event_id": "EVT-001",
+        "type": "task_created | step_ready | step_started | step_done | step_failed | step_needs_human | human_approved | human_rejected | task_completed | task_failed | task_canceled | status_changed",
+        "actor": "pm | dev | qa | po | system",
+        "step_id": "S1 | null (task 级事件)",
+        "timestamp": "ISO 8601 datetime",
+        "payload": {
+          "from_status": "PENDING",
+          "to_status": "IN_PROGRESS",
+          "reason": "开始执行",
+          "evidence": "可选的证据引用"
+        }
+      }
+    ],
+
+    "dependencies": ["TASK-001"],
+    "blocked_by_tasks": [],
+    "blocked_reason": "",
+    "cancellation_reason": "",
+    "reopen_reason": "",
+    "notes": ""
+  }
+}
