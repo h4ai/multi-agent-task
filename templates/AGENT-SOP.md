@@ -1,10 +1,12 @@
 # Agent 标准作业流程（SOP）
 
-> 版本: v2.1 | 创建: 2026-03-21
+> 版本: v2.3 | 创建: 2026-03-21 | 更新: 2026-03-23
 > v1.1: 新增 Dev Runtime Verification Phase
 > v1.2: 修复 QA 审查 P0 问题（状态机/SSOT/回滚/并行冲突/Hotfix）
 > v2.0: 融合多Agent框架调研精华（Step子任务/守卫条件/事件日志/Artifacts）
 > v2.1: 整合 Dev/PO 审查反馈（TDD分级/Verify分级/任务拆分/门禁脚本/证据迁移）
+> v2.2: 方案B — AC引用规范/风险分层审批/verify脚本/并行冲突声明/PO验收模板/Inbox改进
+> v2.3: 需求创建与变更统一流程/Inbox-TASK状态一致性/PM核心原则/流程文档化+仓库同步
 > 目的: 确保每个 Agent 读取和执行任务时完全符合流程，零偏差
 
 ---
@@ -165,6 +167,22 @@ PENDING → READY → RUNNING → DONE
 
 **PM 在创建 TASK 时必须指定这两个字段。Dev 如认为分级不合理，可在 event_log 中提出调整请求。**
 
+#### 1.5.1 TDD 分级执行规则（v2.2 新增）
+
+task_class 决定 TDD 严格程度，**Dev 必须按此表执行，不得自行降级**：
+
+| task_class | TDD 模式 | 具体要求 |
+|------------|---------|---------|
+| `security` | **严格 TDD** | 每个 AC 必须先写失败测试 → 再实现 → 分开 commit |
+| `feature` | **核心 TDD** | 核心业务 AC 写单测，UI 展示类可用截图替代 |
+| `bugfix` | **回归优先** | 先写复现 Bug 的测试 → 修复 → 验证测试通过 |
+| `migration` | **允许 TAD** | 先实现后补测试，但必须在 notes 说明 TAD 原因 |
+| `ui-only` | **免单测** | Playwright 截图 + Console 无 Error 即为证据 |
+| `infra` | **允许 TAD** | Runtime Verify 结果为主要证据，单测可选 |
+
+**Dev 如认为分级不合理**：在 event_log 提出 `tdd_exemption_request`，PM 审批后方可调整。
+
+
 ### 1.6 证据管理（v2.1 新增）
 
 **所有证据产物存储到 repo 内可追溯位置**（不再用 /tmp）：
@@ -183,6 +201,26 @@ artifacts/
 - `artifacts/` 目录加入 `.gitignore`（截图/PDF 不进 Git，但目录结构保留）
 - 在 TASK JSON 的 `artifacts[]` 中用相对路径引用
 - 关键报告（QA report / PO acceptance）以 Markdown 形式提交到 `specs/reports/`
+
+### 1.5.2 AC 引用规范（v2.2 新增）
+
+**每个 AC 必须引用 Spec 原文段落**，格式：`ac_ref: "SPEC-XXX §X.X 段落标题"`
+
+示例：
+```json
+{
+  "ac_id": "AC-AUTH-1",
+  "description": "用户可通过 LDAP 账号登录",
+  "ac_ref": "SPEC-001 §2.1 LDAP 认证流程",
+  "evidence_type": "api-log"
+}
+```
+
+**规则：**
+- PM 创建 TASK 时必须为每个 AC 填写 `ac_ref`
+- QA 验证时必须打开 `ac_ref` 指向的 Spec 段落对照验证
+- PO 验收时按 `ac_ref` 逐条追溯到 Spec 原文
+- 无 `ac_ref` 的 AC 视为"未关联需求"，门禁警告
 
 ### 1.7 完成标准（v2.1 调整）
 
@@ -233,23 +271,35 @@ console.log('TRACKER.json synced:', summary);
 "
 ```
 
-### 1.6 并行任务冲突处理
+### 1.6 并行任务冲突处理（v2.2 强化）
 
 **规则：改同一个文件的任务不能同时派发。**
 
-PM 派发前必须检查：
-```
-Step 1: 读取待派发任务的 code_context.files
-Step 2: 对比当前 in_progress 任务的 code_context.files
-Step 3: 如果有重叠文件 → 设置依赖关系，串行执行
-Step 4: 特别注意 App.tsx、api.ts 等"根文件"
+**TASK JSON 中必须声明主写文件（v2.2 新增）：**
+```json
+{
+  "code_context": {
+    "files": ["src/App.tsx", "src/api.ts", "src/pages/Search.tsx"],
+    "primary_files": ["src/pages/Search.tsx"],  // ← v2.2: 主写文件声明
+    "tests": ["src/__tests__/search.test.tsx"]
+  }
+}
 ```
 
-如果已经并行且发生冲突：
+PM 派发前**自动查重**流程：
+```bash
+# 检查待派发任务的 primary_files 是否与 in_progress 任务冲突
+node scripts/tasks/check-conflicts.js TASK-XXX
+# 输出: ✅ 无冲突 / ⚠️ 与 TASK-YYY 冲突（src/App.tsx）
 ```
-1. 后完成的任务负责 rebase：git pull --rebase origin main
-2. 解决冲突后重新走 Runtime Verification
-3. 在 TASK JSON notes 中记录冲突处理过程
+
+冲突处理策略：
+```
+Step 1: 读取待派发任务的 code_context.primary_files
+Step 2: 对比当前 in_progress 任务的 code_context.primary_files + files
+Step 3: 如果有重叠 → 设置依赖关系，串行执行
+Step 4: 特别注意 App.tsx、api.ts、routes.ts 等"根文件"
+Step 5: 如果已经并行且发生冲突 → 后完成的 rebase + 重新 Runtime Verify
 ```
 
 ### 1.7 任务取消/回滚流程
@@ -333,6 +383,37 @@ Step 2: 更新 TRACKER.json
 Step 3: git commit + push
 Step 4: 向 PM 报告阻塞（通过群聊消息）
 ```
+
+### 5. Inbox 消息机制（v2.2 新增）
+
+**任务派发通过 Inbox 消息机制，不通过直接 spawn subagent。**
+
+```
+PM → inbox.js send → Agent inbox → Agent cron 消费 → 执行任务
+```
+
+**核心规则：**
+- PM 派发任务必须通过 `inbox.js send`，不能直接 `sessions_spawn`
+- Agent 通过 cron 定期检查 inbox（每 5 分钟）
+- 消息类型：`task_assign`（任务）、`question`（问题）、`bug_report`（Bug）、`status_update`（状态）
+
+**消息丢失防护（v2.2）：**
+```bash
+# 如果消息被消费但任务未执行，可从 archive 恢复
+node scripts/tasks/inbox.js requeue --agent qa --task-id TASK-XXX
+```
+
+**Inbox 脚本命令：**
+| 命令 | 用途 |
+|------|------|
+| `send` | 发送消息到 agent inbox |
+| `receive` | 消费消息（destructive read → archive） |
+| `peek` | 查看消息（non-destructive） |
+| `count` | 统计未读消息数 |
+| `requeue` | 从 archive 恢复消息（v2.2 新增） |
+| `history` | 查看历史消息 |
+| `broadcast` | 广播消息给所有 agent |
+
 
 ---
 
@@ -435,6 +516,26 @@ Phase 3: ★ Runtime Verification（运行时验证 —— 不可跳过！）
       ├── 搜索功能 http://localhost/search → 正常工作
       ├── 登录/登出流程 → 正常
       └── 如果有回归问题 → 修复后重新走 Step 3.1
+
+
+#### 自动化验证脚本（v2.2 新增）
+
+Dev 可使用自动化脚本简化 Runtime Verification：
+
+```bash
+# 一键验证（自动读取 TASK JSON → 决定 build targets → 跑 healthcheck → 执行 commands）
+node scripts/tasks/task-verify.js TASK-XXX
+
+# 脚本自动执行：
+# 1. 读取 TASK JSON 的 env_context.services → 决定 rebuild 哪些服务
+# 2. docker compose build <targets> + up -d
+# 3. health check（轮询直到通过或超时）
+# 4. 执行 verification.commands 中的所有命令
+# 5. 输出结构化结果到 verification.runtime_logs（自动填充）
+# 6. 回归检查：curl 首页 + 搜索 + 登录
+```
+
+**如果脚本不存在或失败，Dev 必须手动执行 Phase 3 的每个步骤。脚本是辅助，不是替代。**
 
 Phase 4: 静态自检（Runtime Verification 之后）
   ├── pnpm -r typecheck → 0 errors
@@ -617,6 +718,47 @@ Phase 3: 验收决定
 Phase 4: 更新任务文件 + 报告
 ```
 
+
+### PO 验收清单模板（v2.2 新增）
+
+**PO 验收每个任务时，必须逐项检查以下清单：**
+
+```markdown
+## PO 验收清单 — TASK-XXX
+
+### 信息架构
+- [ ] 页面标题/面包屑与功能一致
+- [ ] 导航路径符合用户预期（≤3 次点击达到目标）
+- [ ] 数据分类/分组逻辑清晰
+
+### 交互一致性
+- [ ] 按钮/链接点击有响应（loading/toast/跳转）
+- [ ] 表单提交有成功/失败反馈
+- [ ] 返回/取消操作符合预期
+
+### 空状态 & 错误状态
+- [ ] 空列表有友好提示（不是空白）
+- [ ] 网络错误有提示（不是白屏）
+- [ ] 权限不足有明确提示
+
+### 权限控制
+- [ ] 未登录用户看不到需权限的功能
+- [ ] 低权限用户操作被正确拒绝
+- [ ] 权限提示文案清晰
+
+### Spec 覆盖
+- [ ] 覆盖率 = 已 PASS AC 数 / 总 AC 数 ≥ 95%
+- [ ] 延后 AC 有 linked_tasks + 目标 Sprint
+```
+
+**PO 打回标准（满足任一即 REJECT）：**
+- AC 不可复现（QA 说 PASS 但 PO 操作不出来）
+- 证据缺失（没截图/没日志）
+- 与 Spec 偏差未记录
+- 覆盖率 <95% 且延后项无目标 Sprint
+
+**PO 证据字段（v2.2）：** 在 TASK JSON 中记录 `verification.po_notes` 和 `verification.po_screenshots`
+
 ### PO 禁止事项
 
 ```
@@ -669,6 +811,107 @@ Phase 3: 门禁检查（任务标记 review 或 done 后）
   │   □ 无 TODO/FIXME 残留
   └── 门禁不通过 → 打回，status 改为 "in_progress"
 ```
+
+
+### 需求创建与变更统一流程（v2.3 更新，强制执行！）
+
+> v2.3 更新（2026-03-23）：沈老板确认——需求创建和需求变更必须走同一个流程，新需求也要三方对齐。
+
+**每次有需求创建或变更（新功能、Spec 修改、用户反馈、方向调整），必须走以下 4 步流程，禁止跳步！**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Step 1: 需求提出 + PO 更新 Spec                             │
+│  ├── 来源：沈老板/PO/用户反馈/QA验收/Dev发现                  │
+│  ├── PO 根据需求内容更新对应 SPEC-XXX.md                      │
+│  │   （沈老板直接下达的简单 UI 需求，PM 可代写 AC）            │
+│  ├── 新增 AC 必须有编号（AC-XX）                              │
+│  ├── 修改现有 AC 必须标注 [CHANGED] + 变更原因                 │
+│  ├── 更新 SPEC-COVERAGE-MATRIX.md（标注新增/变更章节）         │
+│  └── git commit -m "spec(SPEC-XXX): [变更摘要]"              │
+│                                                              │
+│  Step 2: 三方对齐（PM + Dev + QA 同步确认）⚠️ 不可跳过！       │
+│  ├── PM 通过 inbox 同时通知 Dev 和 QA                         │
+│  │   → type: review_request                                  │
+│  │   → 内容包含：完整 AC 列表 + 背景说明                      │
+│  ├── Dev 确认：技术可行性 + 预估工时 + 影响范围                │
+│  ├── QA 确认：可测试性 + 测试用例覆盖 + 回归范围               │
+│  ├── 三方都 ACK 后才能进入 Step 3                             │
+│  └── 任一方有异议 → 回到 Step 1 修改                          │
+│                                                              │
+│  Step 3: PM 创建/更新 TASK JSON                              │
+│  ├── 按需求拆分为 TASK-XXX.json                               │
+│  ├── spec_context 必须精确到章节 + AC 编号                     │
+│  │   → ✅ "spec_id": "SPEC-006", "sections": ["§3.7"],       │
+│  │       "acceptance_criteria": ["AC-11", "AC-13"]            │
+│  │   → ❌ "sections": ["SPEC-006 Templates"]（太笼统）         │
+│  ├── risk_level 必填                                          │
+│  └── validate-task.js --pre-execute 验证通过                   │
+│                                                              │
+│  Step 4: PM 用 dispatch-task.js 派发                          │
+│  ├── dispatch-task.js 标准流程（validate → status → inbox）    │
+│  ├── 禁止手动 inbox.js send（会跳过验证和 learnings 匹配）     │
+│  └── git commit + push                                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**触发条件（任一满足即触发此流程）：**
+- 用户/老板提出新功能需求（⚠️ 新需求也要走！不只是变更！）
+- 用户/老板对现有功能提出修改意见
+- QA 或 PO 验收发现 Spec 遗漏
+- Dev 实现时发现 Spec 不完整需要补充
+
+**禁止事项：**
+- ❌ PM 直接创建 TASK + 派发而不走三方对齐（即使需求看起来很简单）
+- ❌ PM 直接创建 TASK 而不更新 Spec（无 Spec 依据的任务）
+- ❌ Dev 直接实现用户口头需求而不走 Spec（Spec 是 SSOT）
+- ❌ 只通知一方（必须 Dev + QA 同时确认）
+- ❌ 用手动 inbox.js send 派发（必须 dispatch-task.js）
+
+### Inbox-TASK 状态一致性保障（v2.3 新增）
+
+**防止 Inbox 消息和 TASK 状态不一致的 4 项机制：**
+
+| # | 机制 | 防护场景 | 实现位置 |
+|---|------|---------|---------|
+| 1 | **dispatch 幂等** | inbox 已有同任务消息则跳过 | dispatch-task.js |
+| 2 | **PARTIAL_PROGRESS** | 有历史 commit 的任务不自动重置 | stalled-check.js |
+| 3 | **inbox pending 守卫** | 有未消费消息的任务标记 ACTIVE | stalled-check.js |
+| 4 | **增强 commit 检测** | 3 种方法（message/file/git -S） | stalled-check.js |
+
+**stalled-check.js 判定逻辑：**
+```
+STALLED（自动恢复）: inbox 已消费 + 0 历史 commit + 0 step progress + event 超时
+PARTIAL_PROGRESS（仅报告）: inbox 已消费 + 有历史 commit + event 超时
+ACTIVE（跳过）: inbox 有未消费消息 / 有最近 commit / event 未超时
+```
+
+### PM 核心原则（v2.3 新增）
+
+> **"改进机制 > 直接下场干活"** — 沈老板 2026-03-22 确认
+
+- PM 不直接 spawn subagent 执行任务（绕过 Inbox 机制）
+- 正确做法：排查机制为什么没工作 → 修复机制 → 让机制自动驱动
+- 所有任务必须通过 Inbox 派发 → Agent cron 自动消费
+- 流程变更必须更新 SOP 文档 + 同步到 multi-agent-task 仓库
+
+### 风险分层审批（v2.2 新增）
+
+**不是所有任务都需要完整 Dev → QA → PO 三段链路。按风险分层：**
+
+| 风险等级 | task_class | 审批链路 | 说明 |
+|----------|-----------|---------|------|
+| 🔴 高风险 | `security` | Dev → QA → PO 完整链路 | 权限/认证/路由守卫，必须严格验证 |
+| 🟡 中风险 | `feature`, `bugfix` | Dev → QA → PO 抽验 | QA 完整测试，PO 可合并抽验（不逐条看） |
+| 🟢 低风险 | `ui-only`, `migration`, `infra` | Dev 自证 → QA 抽检 → PO 免验 | Dev 提供截图+日志，QA 抽检 2-3 个 AC |
+
+**PM 派发时在 TASK JSON 中标注 `risk_level: "high" | "medium" | "low"`**
+
+低风险快速通道规则：
+- Dev 提交 `verification.runtime_logs` + `verification.screenshots` 作为自证据
+- QA 只验证 `risk_level=high` 的 AC + 随机抽检 2 个其他 AC
+- PO 只看 QA 报告摘要，不逐条验收
+- **如果 QA 抽检发现问题 → 自动升级为中风险，走完整链路**
 
 ### PM 派发 Dev 任务模板
 

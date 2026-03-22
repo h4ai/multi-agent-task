@@ -17,6 +17,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { execSync } = require('child_process');
 
 // #3: 从 TASK JSON 提取关键词用于 learnings 语义匹配
@@ -114,6 +115,27 @@ for (const taskId of taskIds) {
     continue;
   }
 
+  // Step 1.5: Idempotency check — skip if inbox already has message for this task
+  const agent = task.assignee || task.assigned_to;
+  if (agent) {
+    const inboxDir = path.join(os.homedir(), '.openclaw', 'shared', 'inbox', agent);
+    if (fs.existsSync(inboxDir)) {
+      const pendingMsgs = fs.readdirSync(inboxDir).filter(f => f.endsWith('.json') && !f.startsWith('.'));
+      const hasPending = pendingMsgs.some(f => {
+        try {
+          const msg = JSON.parse(fs.readFileSync(path.join(inboxDir, f), 'utf8'));
+          return msg.task_id === taskId || (msg.metadata && msg.metadata.task_id === taskId);
+        } catch { return false; }
+      });
+      if (hasPending) {
+        console.log(`  ⏭️ 跳过 — ${agent} inbox 已有 ${taskId} 的未消费消息（幂等保护）`);
+        results.skipped = results.skipped || [];
+        results.skipped.push({ id: taskId, reason: 'inbox message already pending' });
+        continue;
+      }
+    }
+  }
+
   // Step 2: Validate status
   if (task.status !== 'PENDING' && task.status !== 'BLOCKED') {
     console.error(`  ❌ 状态 ${task.status} 不可派发（需要 PENDING 或 BLOCKED）`);
@@ -175,15 +197,15 @@ for (const taskId of taskIds) {
   }
 
   // Step 5: Send inbox message
-  const agent = task.assignee || 'dev';
+  const agentTarget = task.assignee || 'dev';
   const taskPriority = task.priority === 'P0' ? 'urgent' : (priority || 'normal');
   
-  console.log(`  📩 Step 3: 发送到 ${agent} inbox (${taskPriority})...`);
+  console.log(`  📩 Step 3: 发送到 ${agentTarget} inbox (${taskPriority})...`);
   
-  // Step 5a: Load relevant learnings for this agent (L2 + L3 keyword matching)
+  // Step 5a: Load relevant learnings for this agentTarget (L2 + L3 keyword matching)
   let learningsContext = '';
   try {
-    const sharedDir = path.join(process.env.HOME || '/home/azureuser', '.openclaw/shared/learnings', agent);
+    const sharedDir = path.join(process.env.HOME || '/home/azureuser', '.openclaw/shared/learnings', agentTarget);
     const commonDir = path.join(process.env.HOME || '/home/azureuser', '.openclaw/shared/learnings/common');
     
     // #3: 从任务内容提取关键词用于语义匹配
@@ -250,11 +272,11 @@ for (const taskId of taskIds) {
     `   - verification.regression_check — homepage/search/login_logout 精确填 "PASS"`,
     `   - artifacts[] — 交付物列表 (type + path + description)`,
     `   - steps[] — 所有 status 改为 "DONE"`,
-    `5. node scripts/tasks/update-task.js ${taskId} --status REVIEW --actor ${agent} --reason "AC X/X PASS"`,
+    `5. node scripts/tasks/update-task.js ${taskId} --status REVIEW --actor ${agentTarget} --reason "AC X/X PASS"`,
     `6. 【强制门禁】node scripts/tasks/pre-commit-gate.js ${taskId} && git add -A && git commit -m "feat: ${taskId} ..."`,
     `   ⚡ pre-commit-gate.js 会自动检查+修复，不通过则阻断 commit`,
     `   ⚡ 如果阻断了，按提示修复后重新运行`,
-    `7. node scripts/tasks/inbox.js send --to pm --from ${agent} --type task_done --task-id ${taskId} --content "完成"`,
+    `7. node scripts/tasks/inbox.js send --to pm --from ${agentTarget} --type task_done --task-id ${taskId} --content "完成"`,
     ``,
     acSummary ? `验收标准:\n${acSummary}` : '',
     stepsSummary ? `\n步骤:\n${stepsSummary}` : '',
@@ -264,18 +286,18 @@ for (const taskId of taskIds) {
   try {
     const inboxScript = path.join(config.scriptsDir, 'inbox.js');
     execSync(
-      `node "${inboxScript}" send --to ${agent} --from pm --type task_assign --task-id ${taskId} --priority ${taskPriority} --content "${content.replace(/"/g, '\\"')}"`,
+      `node "${inboxScript}" send --to ${agentTarget} --from pm --type task_assign --task-id ${taskId} --priority ${taskPriority} --content "${content.replace(/"/g, '\\"')}"`,
       { cwd: config.projectDir, encoding: 'utf8', stdio: 'pipe' }
     );
-    console.log(`  ✅ 已发送到 ${agent} inbox`);
+    console.log(`  ✅ 已发送到 ${agentTarget} inbox`);
   } catch (e) {
     console.error(`  ❌ inbox 发送失败: ${(e.stderr || e.message).trim()}`);
     results.failed.push({ id: taskId, reason: 'inbox send failed' });
     continue;
   }
 
-  results.dispatched.push({ id: taskId, agent, priority: taskPriority });
-  console.log(`  🚀 ${taskId} → ${agent} 派发完成`);
+  results.dispatched.push({ id: taskId, agent: agentTarget, priority: taskPriority });
+  console.log(`  🚀 ${taskId} → ${agentTarget} 派发完成`);
 }
 
 // Summary

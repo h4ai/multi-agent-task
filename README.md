@@ -196,6 +196,53 @@ QA done → report exists? → PO
 PO done → acceptance exists? → Next Sprint
 ```
 
+## Requirement Flow (v2.3)
+
+All requirement creation and changes follow the same 4-step process:
+
+```
+Step 1: Requirement raised → PO updates Spec
+Step 2: Three-way alignment (PM + Dev + QA confirm)
+        → Dev: technical feasibility + effort estimate
+        → QA: testability + regression scope
+        → All ACK before proceeding
+Step 3: PM creates/updates TASK JSON → validate-task.js passes
+Step 4: PM dispatches via dispatch-task.js → Agent cron consumes
+```
+
+**Key rules:**
+- New requirements AND changes use the same flow
+- PM cannot skip three-way alignment, even for "simple" tasks
+- `dispatch-task.js` is the only allowed dispatch method (not manual `inbox.js send`)
+
+## Inbox-TASK State Consistency (v2.3)
+
+Four mechanisms prevent inbox/TASK state divergence:
+
+| # | Mechanism | Script | Purpose |
+|---|-----------|--------|---------|
+| 1 | Dispatch idempotency | `dispatch-task.js` | Skip if inbox already has pending message for same task |
+| 2 | PARTIAL_PROGRESS | `stalled-check.js` | Don't auto-reset tasks with historical commits |
+| 3 | Inbox pending guard | `stalled-check.js` | Mark tasks with unconsumed messages as ACTIVE |
+| 4 | Enhanced commit detection | `stalled-check.js` | 3 methods: message grep + file path + `git -S` |
+
+```bash
+# Check for stalled tasks (report only)
+node scripts/stalled-check.js --threshold 120 --json
+
+# Auto-recover truly stalled tasks + re-dispatch
+node scripts/stalled-check.js --threshold 120 --auto-recover --dispatch
+```
+
+## PM Core Principles
+
+> **"Improve the mechanism > Do the work yourself"**
+
+- PM does NOT directly spawn subagents (bypasses Inbox mechanism)
+- Correct approach: diagnose why mechanism failed → fix mechanism → let mechanism drive
+- All tasks must be dispatched through Inbox → Agent cron auto-consumes
+- Process changes must be documented in SOP + synced to this repo
+
 ## Inspired By
 
 - **[ClawTeam](https://github.com/HKUDS/ClawTeam)** — File transport, dead letters, dep resolution, duration tracking, tmux board
